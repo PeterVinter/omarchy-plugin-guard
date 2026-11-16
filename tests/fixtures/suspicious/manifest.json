@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture.weather-ticker",
+  "name": "Weather Ticker",
+  "version": "0.3.1",
+  "author": "Fixture",
+  "license": "MIT",
+  "description": "Temperature in the bar, fetched from a weather API.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": { "displayName": "Weather Ticker", "category": "Info", "allowMultiple": false }
+}

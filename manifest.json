@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "peter.plugin-guard",
+  "name": "Plugin Guard",
+  "version": "0.1.0",
+  "author": "peter",
+  "license": "MIT",
+  "description": "Scans a third-party Omarchy plugin before you install it and shows what it would be able to do.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Plugin Guard",
+    "description": "Shield icon showing the last scan verdict. Click to scan a plugin's git URL before installing it.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

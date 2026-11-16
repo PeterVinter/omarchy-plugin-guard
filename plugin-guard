@@ -1,0 +1,3 @@
+#!/bin/sh
+# Command-line entry for Plugin Guard. Symlink this into ~/.local/bin.
+exec python3 -I "$(dirname "$(readlink -f "$0")")/scanner.py" "$@"

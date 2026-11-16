@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture.cool-visualizer",
+  "name": "Cool Visualizer",
+  "version": "2.0.0",
+  "author": "Fixture",
+  "license": "MIT",
+  "description": "Audio bars for your bar. Totally harmless.",
+  "kinds": ["bar-widget", "service"],
+  "entryPoints": { "barWidget": "BarWidget.qml", "service": "Service.qml" },
+  "barWidget": { "displayName": "Cool Visualizer", "category": "Audio", "allowMultiple": false }
+}

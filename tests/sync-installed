@@ -1,0 +1,10 @@
+#!/bin/bash
+# Copies the runtime files into the installed plugin folder and restarts the
+# shell, which caches plugin QML per id.
+set -euo pipefail
+src="$(dirname "$(dirname "$(readlink -f "$0")")")"
+dst="$HOME/.config/omarchy/plugins/peter.plugin-guard"
+mkdir -p "$dst/i18n"
+cp "$src"/{manifest.json,Panel.qml,Risk.js,scanner.py,plugin-guard} "$dst/"
+cp "$src"/i18n/*.json "$dst/i18n/"
+omarchy-restart-shell

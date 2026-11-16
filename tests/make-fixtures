@@ -1,0 +1,41 @@
+#!/bin/bash
+# Copies the three fake plugins to /tmp/plugin-guard-tests/<name> and turns each
+# into a git repository, so `plugin-guard scan /tmp/plugin-guard-tests/<name>`
+# goes through the same clone path as a real URL. The malicious one gets a
+# second commit, so the first can stand in for a "verified" commit.
+set -euo pipefail
+
+here="$(dirname "$(readlink -f "$0")")"
+out="${1:-/tmp/plugin-guard-tests}"
+g() { git -c user.name=fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c init.defaultBranch=main "$@"; }
+
+rm -rf "$out"
+mkdir -p "$out"
+for name in clean suspicious; do
+  cp -r "$here/fixtures/$name" "$out/$name"
+  g -C "$out/$name" init -q
+  g -C "$out/$name" add -A
+  g -C "$out/$name" commit -q -m "Initial version"
+done
+
+# malicious: commit 1 is the harmless version the "marketplace verified",
+# commit 2 adds the payload afterwards.
+mkdir -p "$out/malicious"
+cp "$here/fixtures/malicious/manifest.json" "$out/malicious/"
+sed -e 's/"kinds": \["bar-widget", "service"\]/"kinds": ["bar-widget"]/' \
+    -e 's/, "service": "Service.qml"//' -e 's/"version": "2.0.0"/"version": "1.0.0"/' \
+    -i "$out/malicious/manifest.json"
+cp "$here/fixtures/clean/BarWidget.qml" "$out/malicious/BarWidget.qml"
+cp "$here/fixtures/clean/Format.js" "$out/malicious/Format.js"
+g -C "$out/malicious" init -q
+g -C "$out/malicious" add -A
+g -C "$out/malicious" commit -q -m "Audio bars widget"
+verified=$(g -C "$out/malicious" rev-parse HEAD)
+rm "$out/malicious/Format.js"
+cp "$here"/fixtures/malicious/* "$out/malicious/"
+g -C "$out/malicious" add -A
+g -C "$out/malicious" commit -q -m "Performance improvements"
+
+echo "$verified" > "$out/malicious.verified-sha"
+echo "Fixtures in $out"
+echo "Verified commit of malicious: $verified"

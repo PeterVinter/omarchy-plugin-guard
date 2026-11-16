@@ -1,0 +1,138 @@
+# Plugin Guard
+
+Scan a third-party Omarchy plugin **before** you install it.
+
+Omarchy plugins run unsandboxed inside `omarchy-shell`, and `omarchy plugin add <git-url>`
+installs the repository's current HEAD, which can be newer than the commit the marketplace
+verified. Plugin Guard clones the repository into `/tmp`, reads every file without running
+any of it, and tells you what the plugin would be able to do.
+
+![Danger verdict](docs/screenshots/01-danger-ristretto.png)
+
+## What it does
+
+- Clones the URL into `/tmp/plugin-guard/<id>/repo` (a folder only you can read). Nothing in
+  it is executed, imported or loaded.
+- Scans QML, JS, shell, Python, Lua and `manifest.json` and gives a verdict:
+  **safe**, **caution** or **danger**, with a list of file, line, rule and snippet.
+- With a verified commit SHA: shows `git diff <sha>..HEAD`, a summary of what changed, and
+  marks the findings that sit in lines added since that commit.
+- Installs only after you confirm, and installs the exact commit that was scanned (or the
+  verified one), not whatever HEAD is by then.
+
+| Level | Flags |
+|---|---|
+| High | `curl`/`wget` piped to a shell, `eval`, `sudo`/`pkexec`, shell `-c` with interpolated input, base64 decode next to execution, writes outside the plugin's own folder, `~/.ssh`, keyrings and browser profiles, `/dev/tcp` sockets, cron and systemd persistence |
+| Medium | URLs, `XMLHttpRequest`, WebSockets, `curl`/`wget`/`nc`, `Process` and other exec calls, paths outside the plugin's folder, base64 decoding, obfuscated lines, binaries, symlinks, submodules, manifest problems |
+| Info | External programs it calls, what the manifest declares, file inventory |
+
+Any high finding makes the verdict danger. Any medium finding makes it caution.
+
+## Install
+
+```bash
+git clone <this repository> ~/.config/omarchy/plugins/peter.plugin-guard
+omarchy plugin enable peter.plugin-guard --section right
+ln -s ~/.config/omarchy/plugins/peter.plugin-guard/plugin-guard ~/.local/bin/plugin-guard   # optional CLI
+```
+
+Needs `python3` and `git`. No root, and no network access other than `git clone` and `git fetch`.
+
+## Use
+
+**Panel.** Click the shield in the bar. Paste a git URL, optionally the verified commit SHA,
+and press Enter. Tab moves between the fields, the sections and the buttons, Enter or Space
+opens a section, Esc closes the panel. Install asks a second time, naming the plugin and the
+commit, with the focus on Back.
+
+The shield shows the last result: outline (nothing scanned), check (safe), outlined alert
+(caution), solid alert (danger), crossed out (the scan failed). It breathes while a scan
+runs. Middle-click clears the last result.
+
+**Command line.**
+
+```bash
+plugin-guard scan https://github.com/user/plugin.git
+plugin-guard scan https://github.com/user/plugin.git --verified <sha>   # adds the diff
+plugin-guard scan <url> --json
+plugin-guard install <scan-id>                  # the scanned HEAD, asks you to type yes
+plugin-guard install <scan-id> --commit <sha>   # the verified commit
+plugin-guard last                               # the last result again
+plugin-guard clean                              # delete the copies in /tmp
+```
+
+`scan` exits 0 for safe and caution, 1 for danger and 2 when the scan failed. A command-line
+scan also updates the shield in the bar (`--no-save` skips that).
+
+**From other tools.** `omarchy-shell peter.plugin-guard scan <url>`,
+`scanVerified <url> <sha>`, `toggle`, `expand high|medium|info|diff|all|none`, `state`.
+
+After an install, enable the plugin yourself: `omarchy plugin enable <id>`.
+
+## Theme
+
+Everything follows the active Omarchy theme and updates live on a theme switch. Background,
+text, accent, borders, fonts, corner radius and spacing come from the shell's own
+`qs.Commons` `Color` and `Style`, the same objects the Audio and Network panels use. The
+three risk colours are the theme's own green, yellow and red from its `colors.toml`. When a
+theme's "green" is not green (Matte Black's is amber), another palette colour with the right
+hue is used, or one is derived from the theme's red. Monochrome themes get a grey ramp.
+Every colour is checked for contrast against the panel and the bar. The verdict is always
+also a word and an icon shape, never colour alone.
+
+| Catppuccin Latte | Tokyo Night |
+|---|---|
+| ![Caution, light theme](docs/screenshots/05-caution-catppuccin-latte.png) | ![Safe](docs/screenshots/07-safe-tokyo-night.png) |
+| ![Danger, light theme](docs/screenshots/04-danger-catppuccin-latte.png) | ![Caution](docs/screenshots/06-caution-tokyo-night.png) |
+
+| Diff since the verified commit | Confirm before install |
+|---|---|
+| ![Diff view](docs/screenshots/02-diff-ristretto.png) | ![Confirm step](docs/screenshots/03-confirm-ristretto.png) |
+
+| Invalid URL | Clone failed | Nothing scanned yet |
+|---|---|---|
+| ![Invalid URL](docs/screenshots/08-error-invalid-url.png) | ![Clone failed](docs/screenshots/09-error-clone-failed.png) | ![Empty](docs/screenshots/10-empty-tokyo-night.png) |
+
+## Limits
+
+This is a pattern scan, not a sandbox and not a proof. "Safe" means nothing known was found.
+
+- Rules look at one line at a time. A write whose target is built on another line is reported
+  as a medium "writes files" at most.
+- Documentation and image files are not scanned, since they are not executed.
+- Comments are skipped, so commented-out code is not reported.
+- Ordinary plugins get medium findings. A weather widget does talk to the network. Read the
+  list and decide.
+- The verified commit is trusted because you say so. It is diffed against HEAD, not scanned
+  on its own.
+- Installing leaves `origin` pointing at the real repository, so a later
+  `omarchy plugin update` moves the plugin to a commit nobody has scanned.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `manifest.json` | Plugin manifest (`bar-widget`, entry point `Panel.qml`) |
+| `Panel.qml` | Bar shield and popup panel. UI only. |
+| `Risk.js` | Risk colours (hue and contrast), snippet and diff helpers |
+| `scanner.py` | The scanner and the CLI. Standard library only. |
+| `plugin-guard` | Shell wrapper for the CLI |
+| `i18n/en.json` | Strings |
+| `tests/` | `test_scanner.py`, `risk.test.js`, three fake plugins, `make-fixtures` |
+
+## Tests
+
+```bash
+python3 tests/test_scanner.py
+node tests/risk.test.js
+tests/make-fixtures            # fake plugins as git repos in /tmp/plugin-guard-tests
+plugin-guard scan /tmp/plugin-guard-tests/malicious --verified "$(cat /tmp/plugin-guard-tests/malicious.verified-sha)"
+```
+
+The fixtures in `tests/fixtures/malicious` are inert text on `.invalid` hosts. Scanning this
+repository itself reports danger because of them, and because `scanner.py` contains the
+patterns it looks for.
+
+## License
+
+MIT

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "fixture.clean-clock",
+  "name": "Clean Clock",
+  "version": "1.0.0",
+  "author": "Fixture",
+  "license": "MIT",
+  "description": "Shows the seconds in the bar. Does nothing else.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": { "displayName": "Clean Clock", "category": "Info", "allowMultiple": false }
+}
