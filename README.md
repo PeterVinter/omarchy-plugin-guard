@@ -1,10 +1,10 @@
-# Plugin Guard
+# Omarchy Plugin Guard
 
 Scan a third-party Omarchy plugin **before** you install it.
 
 Omarchy plugins run unsandboxed inside `omarchy-shell`, and `omarchy plugin add <git-url>`
 installs the repository's current HEAD, which can be newer than the commit the marketplace
-verified. Plugin Guard clones the repository into `/tmp`, reads every file without running
+verified. Omarchy Plugin Guard clones the repository into `/tmp`, reads every file without running
 any of it, and tells you what the plugin would be able to do.
 
 ![Danger verdict](docs/screenshots/01-danger-ristretto.png)
@@ -31,12 +31,40 @@ Any high finding makes the verdict danger. Any medium finding makes it caution.
 ## Install
 
 ```bash
-git clone <this repository> ~/.config/omarchy/plugins/peter.plugin-guard
+omarchy plugin add https://github.com/PeterVinter/omarchy-plugin-guard.git --yes
 omarchy plugin enable peter.plugin-guard --section right
-ln -s ~/.config/omarchy/plugins/peter.plugin-guard/plugin-guard ~/.local/bin/plugin-guard   # optional CLI
 ```
 
-Needs `python3` and `git`. No root, and no network access other than `git clone` and `git fetch`.
+Optional, for the `plugin-guard` command in a terminal:
+
+```bash
+ln -s ~/.config/omarchy/plugins/peter.plugin-guard/plugin-guard ~/.local/bin/plugin-guard
+```
+
+Requirements: `python3` and `git`, both part of a standard Omarchy install. Nothing else is
+downloaded or installed. The plugin needs no root access and makes no network connection
+other than `git clone` and `git fetch` of the URL you give it.
+
+## Remove
+
+```bash
+omarchy plugin remove peter.plugin-guard
+```
+
+That deletes the plugin folder in `~/.config/omarchy/plugins/`. Three things are left for you
+to decide on:
+
+- `~/.local/bin/plugin-guard`, if you created the link. Delete it.
+- `~/.local/state/plugin-guard/` holds the last scan result and the list of commits you
+  installed through the plugin. Delete the folder to clear both.
+- `/tmp/plugin-guard/` holds the scanned copies until the next reboot.
+
+## What it changes on your system
+
+- Writes only to `/tmp/plugin-guard/` and `~/.local/state/plugin-guard/`.
+- Installs a plugin only after you press Install and then Confirm install (or type `yes` in
+  the terminal). It does that by running `omarchy plugin add` on the scanned copy, which
+  places the plugin in `~/.config/omarchy/plugins/<id>/`. It never enables a plugin.
 
 ## Use
 
@@ -91,7 +119,7 @@ also a word and an icon shape, never colour alone.
 
 | Invalid URL | Clone failed | Nothing scanned yet |
 |---|---|---|
-| ![Invalid URL](docs/screenshots/08-error-invalid-url.png) | ![Clone failed](docs/screenshots/09-error-clone-failed.png) | ![Empty](docs/screenshots/10-empty-tokyo-night.png) |
+| ![Invalid URL](docs/screenshots/08-error-invalid-url.png) | ![Clone failed](docs/screenshots/09-error-clone-failed.png) | ![Empty](docs/screenshots/10-empty-ristretto.png) |
 
 ## Limits
 

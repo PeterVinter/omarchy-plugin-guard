@@ -1,5 +1,5 @@
 {
-  "title": "Plugin Guard",
+  "title": "Omarchy Plugin Guard",
   "idle.meta": "Scan a plugin before you install it",
   "verdict.safe": "Safe",
   "verdict.caution": "Caution",
