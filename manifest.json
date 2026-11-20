@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "peter.plugin-guard",
   "name": "Omarchy Plugin Guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "peter",
   "license": "MIT",
-  "description": "Scans a third-party Omarchy plugin before you install it and shows what it would be able to do.",
+  "description": "Know what an Omarchy plugin can do before you install it: a safe, caution or danger verdict.",
   "kinds": [
     "bar-widget"
   ],
