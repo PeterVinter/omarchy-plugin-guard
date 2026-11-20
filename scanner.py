@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 HIGH, MEDIUM, INFO = "high", "medium", "info"
 SEVERITY_ORDER = {HIGH: 0, MEDIUM: 1, INFO: 2}

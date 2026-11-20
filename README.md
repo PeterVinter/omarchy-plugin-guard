@@ -1,6 +1,20 @@
+<div align="center">
+
 # Omarchy Plugin Guard
 
-Scan a third-party Omarchy plugin **before** you install it.
+**Know what an Omarchy plugin can do before you install it: a safe, caution or danger verdict.**
+
+<img src="preview.png" alt="Plugin Guard shows a verdict for a plugin before you install it: Danger in the middle, with Caution and Safe behind it" width="900">
+
+</div>
+
+## Why you will want it
+
+- **Look before you install.** Paste a repository URL and get a verdict: **safe**, **caution** or **danger**, with the file, line, rule and snippet behind it.
+- **Nothing it scans is run.** It clones the repository into `/tmp` and reads every file. Nothing in it is executed, imported or loaded.
+- **It covers the gap the marketplace leaves.** `omarchy plugin add` installs the repository's current HEAD, which can be newer than the commit that was verified. Give Plugin Guard the verified commit and it shows what changed since, and marks the findings in the added lines.
+- **It installs exactly what it scanned.** After a second confirmation, not whatever HEAD has become by then.
+- **It is honest about its limits.** This is a pattern scan, not a sandbox: "safe" means nothing known was found.
 
 Omarchy plugins run unsandboxed inside `omarchy-shell`, and `omarchy plugin add <git-url>`
 installs the repository's current HEAD, which can be newer than the commit the marketplace
