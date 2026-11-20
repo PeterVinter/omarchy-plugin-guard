@@ -29,7 +29,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 HIGH, MEDIUM, INFO = "high", "medium", "info"
 SEVERITY_ORDER = {HIGH: 0, MEDIUM: 1, INFO: 2}
@@ -80,14 +80,22 @@ SYSTEM_READ_RE = re.compile(r"(?:^|[\s\"'=(:,])/(?:proc|sys|dev/(?!null|stderr|s
 SCRATCH_RE = re.compile(r"(?:/tmp/|\$XDG_RUNTIME_DIR|\$\{XDG_RUNTIME_DIR|/dev/null|/dev/std(?:err|out)|/run/user/)")
 STATE_RE = re.compile(r"(?:\.cache/|\.local/state/|XDG_STATE_HOME|XDG_CACHE_HOME)")
 
+# A credential store, keyring or browser profile is reached by a path or an
+# interface, so these are high. The names of password managers and keyrings
+# alone (a catalog entry, a list of secrets to mask) are not an access; they
+# are a medium finding unless they appear as part of a path (see below).
 SENSITIVE_RE = re.compile(
-    r"(\.ssh(?![\w.])|\bid_(?:rsa|ed25519|ecdsa|dsa)\b|\.gnupg\b|\.local/share/keyrings|gnome-keyring|secret-tool|libsecret"
-    r"|org\.freedesktop\.secrets|kwallet|\.password-store|\.mozilla\b|\.thunderbird\b"
+    r"(\.ssh(?![\w.])|\bid_(?:rsa|ed25519|ecdsa|dsa)\b|\.gnupg\b|\.local/share/keyrings|secret-tool"
+    r"|org\.freedesktop\.secrets|\.password-store|\.mozilla\b|\.thunderbird\b"
     r"|\.config/(?:chromium|google-chrome|BraveSoftware|microsoft-edge|vivaldi|opera)\b"
     r"|(?:chromium|google-chrome|BraveSoftware|Brave-Browser|microsoft-edge)/(?:Default|Profile)"
     r"|Login Data|Cookies\b(?=[\"'/ ]|$)|\.config/gh/hosts|\.aws/credentials|\.netrc\b|\.git-credentials"
-    r"|/etc/shadow|wallet\.dat|\.kube/config|\.docker/config\.json|\.config/op/|Bitwarden|1Password)"
+    r"|/etc/shadow|wallet\.dat|\.kube/config|\.docker/config\.json|\.config/op/)"
 )
+SENSITIVE_NAMES = r"(?:gnome-keyring|libsecret|kwallet\w*|Bitwarden|1Password)"
+# The same names as part of a path: ~/.config/Bitwarden, /usr/bin/kwalletd6, kwallet/...
+SENSITIVE_NAME_PATH_RE = re.compile(r"(?:[/~]|\.config/)" + SENSITIVE_NAMES + r"(?![\w-])|(?<![\w-])" + SENSITIVE_NAMES + r"/")
+SENSITIVE_NAME_RE = re.compile(r"(?<![\w-])" + SENSITIVE_NAMES + r"(?![\w-])")
 
 URL_RE = re.compile(r"\b(?:https?|wss?|ftps?)://[^\s\"'<>)\]}`\\]+")
 NET_TOOLS = r"(?:curl|wget|nc|ncat|netcat|socat|scp|sftp|rsync|telnet|aria2c|ftp|ssh)"
@@ -170,6 +178,7 @@ RULE_TITLES = {
     "base64-exec": "Base64 decode next to code execution",
     "write-outside": "Writes outside its own plugin folder",
     "sensitive-path": "Touches credentials, keyrings or browser profiles",
+    "sensitive-name": "Names a password manager or keyring",
     "raw-socket": "Raw /dev/tcp socket (reverse-shell idiom)",
     "persistence": "Installs itself to run later (cron, systemd)",
     "network-url": "Contains a network URL",
@@ -572,9 +581,13 @@ class Scan:
                     if words:
                         self.note_binary(words[0].strip("\"'`()"), rel, number)
 
-        found = SENSITIVE_RE.search(line)
+        found = SENSITIVE_RE.search(line) or SENSITIVE_NAME_PATH_RE.search(line)
         if found:
             hit(HIGH, "sensitive-path", number, raw, found.span())
+        else:
+            found = SENSITIVE_NAME_RE.search(line)
+            if found:
+                hit(MEDIUM, "sensitive-name", number, raw, found.span())
 
         found = PERSIST_RE.search(line)
         if found:

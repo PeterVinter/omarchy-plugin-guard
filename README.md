@@ -37,7 +37,7 @@ any of it, and tells you what the plugin would be able to do.
 | Level | Flags |
 |---|---|
 | High | `curl`/`wget` piped to a shell, `eval`, `sudo`/`pkexec`, shell `-c` with interpolated input, base64 decode next to execution, writes outside the plugin's own folder, `~/.ssh`, keyrings and browser profiles, `/dev/tcp` sockets, cron and systemd persistence |
-| Medium | URLs, `XMLHttpRequest`, WebSockets, `curl`/`wget`/`nc`, `Process` and other exec calls, paths outside the plugin's folder, base64 decoding, obfuscated lines, binaries, symlinks, submodules, manifest problems |
+| Medium | URLs, `XMLHttpRequest`, WebSockets, `curl`/`wget`/`nc`, `Process` and other exec calls, paths outside the plugin's folder, the name of a password manager or keyring on its own, base64 decoding, obfuscated lines, binaries, symlinks, submodules, manifest problems |
 | Info | External programs it calls, what the manifest declares, file inventory |
 
 Any high finding makes the verdict danger. Any medium finding makes it caution.

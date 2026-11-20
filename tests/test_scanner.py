@@ -83,6 +83,27 @@ class LineRules(unittest.TestCase):
         result = self.check("a.sh", 'ls 2>/dev/null > /tmp/out.txt\n')
         self.assertEqual(result["counts"]["high"], 0)
 
+    def test_a_password_manager_or_keyring_name_alone_is_medium(self):
+        # A catalog entry or a list of secrets to mask names the program; it does not reach into it.
+        for text in ('{ n: "Bitwarden", p: "bitwarden", c: "Utilities" },\n',
+                     'var masked = ["gnome-keyring", "org-kde-kwallet"]\n',
+                     'description: "Works with 1Password and libsecret"\n'):
+            result = self.check("a.js", text)
+            self.assertIn("sensitive-name", rules(result, "medium"), text)
+            self.assertEqual(result["counts"]["high"], 0, text)
+
+    def test_the_same_names_in_a_path_or_as_an_interface_stay_high(self):
+        for name, text in (("a.sh", 'cat ~/.config/Bitwarden/data.json\n'),
+                           ("a.sh", 'ls /usr/bin/kwalletd6\n'),
+                           ("a.py", 'open(home + "/.config/1Password/data")\n'),
+                           ("a.js", 'var dir = "gnome-keyring/"\n'),
+                           ("a.sh", 'secret-tool lookup service foo\n'),
+                           ("a.js", 'var bus = "org.freedesktop.secrets"\n'),
+                           ("a.sh", 'cat ~/.ssh/id_rsa\n')):
+            result = self.check(name, text)
+            self.assertIn("sensitive-path", rules(result, "high"), text)
+            self.assertNotIn("sensitive-name", rules(result), text)
+
     def test_symlink_and_binary(self):
         with tempfile.TemporaryDirectory() as folder:
             os.symlink("/etc/passwd", os.path.join(folder, "link"))
