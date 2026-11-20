@@ -422,6 +422,44 @@ def classify(path, head):
     return "data" if name.startswith(".") else "other"
 
 
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_NAME_RE = re.compile(r"^test[_.-]|[._-](?:test|spec)\.[\w.]+$")
+
+
+def is_test_path(rel):
+    parts = rel.lower().split("/")
+    return any(part in TEST_DIRS for part in parts[:-1]) or bool(TEST_NAME_RE.search(parts[-1]))
+
+
+def without_comment_lines(text, lang):
+    """Drops whole-line comments, as scan_text does, so a name in a comment is
+    not taken for a use. Block comments are kept: that errs toward keeping a
+    finding high."""
+    prefix = {"js": "//", "qml": "//", "sh": "#", "py": "#", "other": "#", "lua": "--"}.get(lang)
+    if prefix is None:
+        return text
+    keep = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith(prefix) and not stripped.startswith("#!"):
+            continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
+def reference_patterns(rel):
+    """Ways a file's name or folder can appear in the code that loads or runs it:
+    its file name as a word, or the path of a folder above it as a path (test/ or
+    "test", not the plain word test)."""
+    parts = rel.split("/")
+    file_name = re.escape(parts[-1])
+    folders = "|".join(re.escape("/".join(parts[:end])) for end in range(1, len(parts)))
+    pattern = r"(?<![\w-])" + file_name + r"(?![\w-])"
+    if folders:
+        pattern += r"|(?<![\w-])(?:" + folders + r")(?:/|(?=[\"'`]))"
+    return re.compile(pattern)
+
+
 class Scan:
     def __init__(self, root, plugin_id=""):
         self.root = root
@@ -430,6 +468,7 @@ class Scan:
         self.binaries = {}
         self.own_files = set()
         self.counts_by_kind = {}
+        self.code_files = []
         self.seen = set()
 
     def add(self, severity, rule, file="", line=0, snippet="", match=None, detail=""):
@@ -707,6 +746,8 @@ class Scan:
                 continue
             kind = classify(rel, data)
             self.bump(kind)
+            if kind not in ("asset", "doc", "binary"):
+                self.code_files.append((rel, kind))
             if rel == ".gitmodules":
                 self.add(MEDIUM, "submodule", rel, 0, "repository declares git submodules", (0, 0))
             if kind in ("asset", "doc"):
@@ -722,6 +763,37 @@ class Scan:
         if total > MAX_FILES:
             self.add(MEDIUM, "obfuscation", "", 0, f"{total} files; only the first {MAX_FILES} were scanned", (0, 0), detail="too-many-files")
         return self
+
+    def demote_unreferenced_test_evals(self):
+        """`eval` or `new Function` in a test file that no other file of the plugin
+        names is never run by the plugin: medium, not high. Only this rule, only
+        when the file's name and its folders appear nowhere in the plugin's code
+        (a test file loaded from Service.qml, a Process command or a script keeps
+        its severity). Everything else in a test file is judged as usual."""
+        candidates = [f for f in self.findings
+                      if f["rule"] == "eval" and f["severity"] == HIGH and len(f["file"]) < 200 and is_test_path(f["file"])]
+        if not candidates:
+            return
+        patterns = {f["file"]: reference_patterns(f["file"]) for f in candidates}
+        referenced = set()
+        for rel, kind in self.code_files:
+            if len(referenced) == len(patterns):
+                break
+            if is_test_path(rel):
+                continue
+            try:
+                with open(os.path.join(self.root, rel), "rb") as handle:
+                    text = handle.read(MAX_FILE_BYTES + 1).decode("utf-8", "replace")
+            except OSError:
+                continue
+            text = without_comment_lines(text, "qml" if rel.endswith(".qml") else kind)
+            for target, pattern in patterns.items():
+                if target not in referenced and pattern.search(text):
+                    referenced.add(target)
+        for finding in candidates:
+            if finding["file"] not in referenced:
+                finding["severity"] = MEDIUM
+                finding["title"] = RULE_TITLES["eval"] + " (in a test file the plugin never references)"
 
     def bump(self, kind):
         self.counts_by_kind[kind] = self.counts_by_kind.get(kind, 0) + 1
@@ -813,6 +885,7 @@ def scan_tree(root):
     scan = Scan(root, plugin_id if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", plugin_id or "") else "")
     info = manifest_findings(scan, manifest, problem)
     scan.run()
+    scan.demote_unreferenced_test_evals()
 
     for entry in sorted(scan.binaries.values(), key=lambda e: e["name"]):
         name = entry["name"]

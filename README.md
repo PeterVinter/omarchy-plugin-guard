@@ -143,6 +143,7 @@ This is a pattern scan, not a sandbox and not a proof. "Safe" means nothing know
   as a medium "writes files" at most.
 - Documentation and image files are not scanned, since they are not executed.
 - Comments are skipped, so commented-out code is not reported.
+- `eval` in a test file that nothing in the plugin refers to is reported as medium, not high. A file counts as referred to when its name or the path of a folder above it appears in the plugin's code (not in a comment). This is a heuristic: a reference built at run time (`"te" + "st/x.js"`) is not seen, so the verdict can be one level lower than the code deserves. Every other rule treats test files like any other file.
 - Ordinary plugins get medium findings. A weather widget does talk to the network. Read the
   list and decide.
 - The verified commit is trusted because you say so. It is diffed against HEAD, not scanned
