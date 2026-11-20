@@ -149,6 +149,12 @@ This is a pattern scan, not a sandbox and not a proof. "Safe" means nothing know
   on its own.
 - Installing leaves `origin` pointing at the real repository, so a later
   `omarchy plugin update` moves the plugin to a commit nobody has scanned.
+- Fetching is bounded while it happens. Each git call that writes the repository runs in its own
+  process group with a CPU-time and a file-size limit, and is killed as soon as the scan's folder
+  holds more than 250 MB or the time limit is reached. The repository is cloned without a
+  checkout, and the checkout starts only if the tree holds at most 20,000 files and 120 MB (read
+  from the tree objects, before any file is written). A larger repository is refused with
+  "too large", not scanned partly.
 
 ## Files
 

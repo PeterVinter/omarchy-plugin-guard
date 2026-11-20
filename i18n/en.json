@@ -19,6 +19,7 @@
   "empty.body": "Paste a plugin's git URL and press Enter. Plugin Guard clones it into /tmp and reads the code without running any of it. Add the commit the marketplace verified to see what changed since.",
   "error.invalid-url": "That is not a git URL",
   "error.clone-failed": "Could not clone the repository",
+  "error.too-large": "The repository is too large to scan safely",
   "error.generic": "The scan did not finish",
   "error.hint": "Check the address and your connection, then scan again.",
   "error.emptyUrl": "Enter a git URL, for example https://github.com/user/plugin.git",
