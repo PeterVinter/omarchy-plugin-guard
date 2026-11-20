@@ -29,7 +29,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 HIGH, MEDIUM, INFO = "high", "medium", "info"
 SEVERITY_ORDER = {HIGH: 0, MEDIUM: 1, INFO: 2}
@@ -80,14 +80,22 @@ SYSTEM_READ_RE = re.compile(r"(?:^|[\s\"'=(:,])/(?:proc|sys|dev/(?!null|stderr|s
 SCRATCH_RE = re.compile(r"(?:/tmp/|\$XDG_RUNTIME_DIR|\$\{XDG_RUNTIME_DIR|/dev/null|/dev/std(?:err|out)|/run/user/)")
 STATE_RE = re.compile(r"(?:\.cache/|\.local/state/|XDG_STATE_HOME|XDG_CACHE_HOME)")
 
+# A credential store, keyring or browser profile is reached by a path or an
+# interface, so these are high. The names of password managers and keyrings
+# alone (a catalog entry, a list of secrets to mask) are not an access; they
+# are a medium finding unless they appear as part of a path (see below).
 SENSITIVE_RE = re.compile(
-    r"(\.ssh(?![\w.])|\bid_(?:rsa|ed25519|ecdsa|dsa)\b|\.gnupg\b|\.local/share/keyrings|gnome-keyring|secret-tool|libsecret"
-    r"|org\.freedesktop\.secrets|kwallet|\.password-store|\.mozilla\b|\.thunderbird\b"
+    r"(\.ssh(?![\w.])|\bid_(?:rsa|ed25519|ecdsa|dsa)\b|\.gnupg\b|\.local/share/keyrings|secret-tool"
+    r"|org\.freedesktop\.secrets|\.password-store|\.mozilla\b|\.thunderbird\b"
     r"|\.config/(?:chromium|google-chrome|BraveSoftware|microsoft-edge|vivaldi|opera)\b"
     r"|(?:chromium|google-chrome|BraveSoftware|Brave-Browser|microsoft-edge)/(?:Default|Profile)"
     r"|Login Data|Cookies\b(?=[\"'/ ]|$)|\.config/gh/hosts|\.aws/credentials|\.netrc\b|\.git-credentials"
-    r"|/etc/shadow|wallet\.dat|\.kube/config|\.docker/config\.json|\.config/op/|Bitwarden|1Password)"
+    r"|/etc/shadow|wallet\.dat|\.kube/config|\.docker/config\.json|\.config/op/)"
 )
+SENSITIVE_NAMES = r"(?:gnome-keyring|libsecret|kwallet\w*|Bitwarden|1Password)"
+# The same names as part of a path: ~/.config/Bitwarden, /usr/bin/kwalletd6, kwallet/...
+SENSITIVE_NAME_PATH_RE = re.compile(r"(?:[/~]|\.config/)" + SENSITIVE_NAMES + r"(?![\w-])|(?<![\w-])" + SENSITIVE_NAMES + r"/")
+SENSITIVE_NAME_RE = re.compile(r"(?<![\w-])" + SENSITIVE_NAMES + r"(?![\w-])")
 
 URL_RE = re.compile(r"\b(?:https?|wss?|ftps?)://[^\s\"'<>)\]}`\\]+")
 NET_TOOLS = r"(?:curl|wget|nc|ncat|netcat|socat|scp|sftp|rsync|telnet|aria2c|ftp|ssh)"
@@ -170,6 +178,7 @@ RULE_TITLES = {
     "base64-exec": "Base64 decode next to code execution",
     "write-outside": "Writes outside its own plugin folder",
     "sensitive-path": "Touches credentials, keyrings or browser profiles",
+    "sensitive-name": "Names a password manager or keyring",
     "raw-socket": "Raw /dev/tcp socket (reverse-shell idiom)",
     "persistence": "Installs itself to run later (cron, systemd)",
     "network-url": "Contains a network URL",
@@ -413,6 +422,44 @@ def classify(path, head):
     return "data" if name.startswith(".") else "other"
 
 
+TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
+TEST_NAME_RE = re.compile(r"^test[_.-]|[._-](?:test|spec)\.[\w.]+$")
+
+
+def is_test_path(rel):
+    parts = rel.lower().split("/")
+    return any(part in TEST_DIRS for part in parts[:-1]) or bool(TEST_NAME_RE.search(parts[-1]))
+
+
+def without_comment_lines(text, lang):
+    """Drops whole-line comments, as scan_text does, so a name in a comment is
+    not taken for a use. Block comments are kept: that errs toward keeping a
+    finding high."""
+    prefix = {"js": "//", "qml": "//", "sh": "#", "py": "#", "other": "#", "lua": "--"}.get(lang)
+    if prefix is None:
+        return text
+    keep = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith(prefix) and not stripped.startswith("#!"):
+            continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
+def reference_patterns(rel):
+    """Ways a file's name or folder can appear in the code that loads or runs it:
+    its file name as a word, or the path of a folder above it as a path (test/ or
+    "test", not the plain word test)."""
+    parts = rel.split("/")
+    file_name = re.escape(parts[-1])
+    folders = "|".join(re.escape("/".join(parts[:end])) for end in range(1, len(parts)))
+    pattern = r"(?<![\w-])" + file_name + r"(?![\w-])"
+    if folders:
+        pattern += r"|(?<![\w-])(?:" + folders + r")(?:/|(?=[\"'`]))"
+    return re.compile(pattern)
+
+
 class Scan:
     def __init__(self, root, plugin_id=""):
         self.root = root
@@ -421,6 +468,7 @@ class Scan:
         self.binaries = {}
         self.own_files = set()
         self.counts_by_kind = {}
+        self.code_files = []
         self.seen = set()
 
     def add(self, severity, rule, file="", line=0, snippet="", match=None, detail=""):
@@ -572,9 +620,13 @@ class Scan:
                     if words:
                         self.note_binary(words[0].strip("\"'`()"), rel, number)
 
-        found = SENSITIVE_RE.search(line)
+        found = SENSITIVE_RE.search(line) or SENSITIVE_NAME_PATH_RE.search(line)
         if found:
             hit(HIGH, "sensitive-path", number, raw, found.span())
+        else:
+            found = SENSITIVE_NAME_RE.search(line)
+            if found:
+                hit(MEDIUM, "sensitive-name", number, raw, found.span())
 
         found = PERSIST_RE.search(line)
         if found:
@@ -694,6 +746,8 @@ class Scan:
                 continue
             kind = classify(rel, data)
             self.bump(kind)
+            if kind not in ("asset", "doc", "binary"):
+                self.code_files.append((rel, kind))
             if rel == ".gitmodules":
                 self.add(MEDIUM, "submodule", rel, 0, "repository declares git submodules", (0, 0))
             if kind in ("asset", "doc"):
@@ -709,6 +763,37 @@ class Scan:
         if total > MAX_FILES:
             self.add(MEDIUM, "obfuscation", "", 0, f"{total} files; only the first {MAX_FILES} were scanned", (0, 0), detail="too-many-files")
         return self
+
+    def demote_unreferenced_test_evals(self):
+        """`eval` or `new Function` in a test file that no other file of the plugin
+        names is never run by the plugin: medium, not high. Only this rule, only
+        when the file's name and its folders appear nowhere in the plugin's code
+        (a test file loaded from Service.qml, a Process command or a script keeps
+        its severity). Everything else in a test file is judged as usual."""
+        candidates = [f for f in self.findings
+                      if f["rule"] == "eval" and f["severity"] == HIGH and len(f["file"]) < 200 and is_test_path(f["file"])]
+        if not candidates:
+            return
+        patterns = {f["file"]: reference_patterns(f["file"]) for f in candidates}
+        referenced = set()
+        for rel, kind in self.code_files:
+            if len(referenced) == len(patterns):
+                break
+            if is_test_path(rel):
+                continue
+            try:
+                with open(os.path.join(self.root, rel), "rb") as handle:
+                    text = handle.read(MAX_FILE_BYTES + 1).decode("utf-8", "replace")
+            except OSError:
+                continue
+            text = without_comment_lines(text, "qml" if rel.endswith(".qml") else kind)
+            for target, pattern in patterns.items():
+                if target not in referenced and pattern.search(text):
+                    referenced.add(target)
+        for finding in candidates:
+            if finding["file"] not in referenced:
+                finding["severity"] = MEDIUM
+                finding["title"] = RULE_TITLES["eval"] + " (in a test file the plugin never references)"
 
     def bump(self, kind):
         self.counts_by_kind[kind] = self.counts_by_kind.get(kind, 0) + 1
@@ -800,6 +885,7 @@ def scan_tree(root):
     scan = Scan(root, plugin_id if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", plugin_id or "") else "")
     info = manifest_findings(scan, manifest, problem)
     scan.run()
+    scan.demote_unreferenced_test_evals()
 
     for entry in sorted(scan.binaries.values(), key=lambda e: e["name"]):
         name = entry["name"]

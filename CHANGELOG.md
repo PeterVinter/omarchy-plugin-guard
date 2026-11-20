@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- **A password manager or keyring named alone is a medium finding, not a high one.** `gnome-keyring`, `libsecret`, `kwallet`, `Bitwarden` and `1Password` used to be "touches credentials, keyrings or browser profiles" (high) wherever the word appeared, so a catalog entry for a password manager, or a list of secrets to mask, made a plugin DANGER. They are now a medium `sensitive-name` ("Names a password manager or keyring"). The same names as part of a path (`~/.config/Bitwarden`, `/usr/bin/kwalletd6`, `gnome-keyring/`) and everything that reaches a store (`~/.ssh`, `~/.gnupg`, `~/.local/share/keyrings`, `secret-tool`, `org.freedesktop.secrets`, browser profiles, `Login Data`, `~/.config/gh/hosts` and the rest) stay high.
+- **`eval` in a test file the plugin never references is medium, not high.** `eval(...)` or `new Function(...)` in a test file (a `test/`, `tests/`, `__tests__/` or `spec/` folder, or a name like `model.test.js`, `a_test.py`, `test_a.py`) is not run by the plugin unless something loads it. When the file's name, or the path of a folder above it, appears nowhere in the plugin's code (comment lines do not count; a quoted `"test"` or `test/` does), the finding is medium and its title says so. Only the `eval` rule is lowered. Everything else in a test file (`curl | sh`, `sudo`, writes outside the folder, sockets, persistence) keeps its severity, and a test file that a `Process` command, a `Loader`, an `import` or a script names keeps `eval` high. The marketplace baseline is unaffected: this is Plugin Guard's own verdict.
+- Tests: two new cases for the name rule and eight for the test-file rule (the loopholes: a referenced file, a folder reference, a name in a comment, a name in code, only `eval` lowered). The version in `scanner.py` is 0.1.3 too.
+
 ## 0.1.2
 
 Fixes the Low finding from the review of 0.1.1: the scan's resource limits started only after the Git checkout.

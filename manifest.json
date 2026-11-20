@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "peter.plugin-guard",
   "name": "Omarchy Plugin Guard",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "peter",
   "license": "MIT",
   "description": "Know what an Omarchy plugin can do before you install it: a safe, caution or danger verdict.",

