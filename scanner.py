@@ -20,13 +20,16 @@ import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import stat
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 HIGH, MEDIUM, INFO = "high", "medium", "info"
 SEVERITY_ORDER = {HIGH: 0, MEDIUM: 1, INFO: 2}
@@ -37,6 +40,14 @@ MAX_FINDINGS = 400
 MAX_SNIPPET = 180
 MAX_DIFF_LINES = 3000
 GIT_TIMEOUT = 180
+# Budget for fetching and checking out untrusted repository content. Every git
+# call that writes it runs under these, so a large repository is stopped while
+# it is being written, not after.
+MAX_DISK_BYTES = 250_000_000      # everything one scan writes: .git and checkout
+MAX_TREE_BYTES = 120_000_000      # uncompressed size of the files a checkout would write
+MAX_TREE_FILES = 20_000           # entries a checkout would write
+MAX_GIT_FILE_BYTES = 150_000_000  # largest single file a git process may write
+GIT_CPU_SECONDS = 120             # CPU time one git process may use
 
 DOC_EXT = {".md", ".markdown", ".txt", ".rst", ".adoc"}
 DOC_NAMES = {"license", "licence", "copying", "notice", "authors", "changelog", "readme"}
@@ -276,7 +287,37 @@ def scan_id_for(url):
     return f"{slug}-{hashlib.sha1(url.encode()).hexdigest()[:8]}"
 
 
-def git(args, cwd=None, timeout=GIT_TIMEOUT, check=True):
+def disk_usage(path):
+    """Bytes actually allocated under path (blocks, so sparse files count as written)."""
+    total = 0
+    stack = [path]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    total += info.st_blocks * 512
+                    if stat.S_ISDIR(info.st_mode):
+                        stack.append(entry.path)
+        except OSError:
+            continue
+    return total
+
+
+def git_limits():
+    """Runs in the child before git starts: no core dumps, bounded CPU time and file size."""
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_CPU, (GIT_CPU_SECONDS, GIT_CPU_SECONDS + 10))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_GIT_FILE_BYTES, MAX_GIT_FILE_BYTES))
+
+
+def git(args, cwd=None, timeout=GIT_TIMEOUT, check=True, budget_dir=None):
+    """Run git. With budget_dir, git runs in its own process group under CPU and
+    file-size limits, and is killed as soon as budget_dir holds more than
+    MAX_DISK_BYTES, so the budget applies while the repository is written."""
     env = dict(os.environ)
     env.update({
         "GIT_TERMINAL_PROMPT": "0",
@@ -286,18 +327,63 @@ def git(args, cwd=None, timeout=GIT_TIMEOUT, check=True):
     })
     base = ["git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never",
             "-c", "core.fsmonitor=false", "-c", "advice.detachedHead=false"]
+    out_file = tempfile.TemporaryFile()
+    err_file = tempfile.TemporaryFile()
     try:
-        done = subprocess.run(base + args, cwd=cwd, env=env, capture_output=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        raise GuardError("git-timeout", f"git {args[0]} timed out after {timeout}s")
-    except FileNotFoundError:
-        raise GuardError("git-missing", "git is not installed")
-    out = done.stdout.decode("utf-8", "replace")
-    err = done.stderr.decode("utf-8", "replace")
-    if check and done.returncode != 0:
+        try:
+            process = subprocess.Popen(base + args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                       stdout=out_file, stderr=err_file,
+                                       start_new_session=True, preexec_fn=git_limits if budget_dir else None)
+        except FileNotFoundError:
+            raise GuardError("git-missing", "git is not installed")
+        deadline = time.monotonic() + timeout
+        stopped = None
+        while process.poll() is None:
+            if time.monotonic() > deadline:
+                stopped = GuardError("git-timeout", f"git {args[0]} timed out after {timeout}s")
+            elif budget_dir and disk_usage(budget_dir) > MAX_DISK_BYTES:
+                stopped = GuardError("too-large", f"The repository is larger than {MAX_DISK_BYTES // 1_000_000} MB, so it was not fetched")
+            if stopped:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                process.wait()
+                raise stopped
+            time.sleep(0.1)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)  # anything git left behind
+        except OSError:
+            pass
+        out_file.seek(0)
+        err_file.seek(0)
+        out = out_file.read().decode("utf-8", "replace")
+        err = err_file.read().decode("utf-8", "replace")
+    finally:
+        out_file.close()
+        err_file.close()
+    if check and process.returncode != 0:
+        if process.returncode in (-signal.SIGXFSZ, -signal.SIGXCPU):
+            raise GuardError("too-large", "git hit its file-size or CPU limit, so the repository was not fetched")
         raise GuardError("git-failed", clean_text(err.strip().splitlines()[-1] if err.strip() else "git failed", 300))
-    return done.returncode, out, err
+    return process.returncode, out, err
+
+
+def check_tree_budget(repo):
+    """Before anything is checked out: size up the files the checkout would
+    write, from the tree objects alone, and refuse a tree over the budget."""
+    _, listing, _ = git(["ls-tree", "-r", "-l", "-z", "HEAD"], cwd=repo)
+    files = 0
+    size = 0
+    for entry in listing.split("\0"):
+        if not entry:
+            continue
+        files += 1
+        fields = entry.split("\t", 1)[0].split()
+        if len(fields) >= 4 and fields[3].isdigit():
+            size += int(fields[3])
+        if files > MAX_TREE_FILES or size > MAX_TREE_BYTES:
+            raise GuardError("too-large", f"The repository holds more than {MAX_TREE_FILES} files or {MAX_TREE_BYTES // 1_000_000} MB of files, so it was not checked out")
 
 
 # ------------------------------------------------------------------ scanner
@@ -824,10 +910,13 @@ def do_scan(url, verified=""):
 
     progress("cloning")
     try:
-        git(["clone", "--quiet", "--no-recurse-submodules", "--", url, repo])
+        # No checkout yet: the budget is checked on the tree before any file is written.
+        git(["clone", "--quiet", "--no-checkout", "--no-recurse-submodules", "--", url, repo], budget_dir=base)
+        check_tree_budget(repo)
+        git(["checkout", "--quiet", "--detach", "HEAD"], cwd=repo, budget_dir=base)
     except GuardError as error:
         shutil.rmtree(base, ignore_errors=True)
-        raise GuardError("clone-failed", error.message)
+        raise GuardError("too-large" if error.code == "too-large" else "clone-failed", error.message)
     head = git(["rev-parse", "HEAD"], cwd=repo)[1].strip()
     subject = git(["log", "-1", "--format=%s"], cwd=repo)[1].strip()
     date = git(["log", "-1", "--format=%cI"], cwd=repo)[1].strip()
@@ -883,8 +972,8 @@ def do_install(scan_id, commit="", assume_yes=False):
 
     stage = os.path.join(base, "install")
     shutil.rmtree(stage, ignore_errors=True)
-    git(["clone", "--quiet", "--no-hardlinks", "--", repo, stage])
-    git(["checkout", "--quiet", "--detach", target], cwd=stage)
+    git(["clone", "--quiet", "--no-hardlinks", "--", repo, stage], budget_dir=stage)
+    git(["checkout", "--quiet", "--detach", target], cwd=stage, budget_dir=stage)
     if git(["rev-parse", "HEAD"], cwd=stage)[1].strip() != target:
         raise GuardError("git-failed", "Could not check out the requested commit")
     manifest, problem = read_manifest(stage)
